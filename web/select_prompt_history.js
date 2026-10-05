@@ -1136,7 +1136,20 @@ app.registerExtension({
             }
 
             for (const w of this.widgets ?? []) {
-                if (w?.value == null && w?.type !== "button") w.value = "";
+                if (!w || w.type === "button") continue;
+
+                if (w.name === "max_entries") {
+                    if (w.value == null || w.value === "") {
+                        w.value = 500000;
+                    } else {
+                        const n = Number(w.value);
+                        w.value = Number.isFinite(n)
+                            ? Math.max(1, Math.min(10000000, Math.trunc(n)))
+                            : 500000;
+                    }
+                } else if (w.value == null) {
+                    w.value = "";
+                }
             }
             this.__sph_syncTextState?.();
             return result;
