@@ -1096,15 +1096,13 @@ app.registerExtension({
         const origSerialize = nodeType.prototype.serialize;
         nodeType.prototype.serialize = function () {
             const data = origSerialize?.apply(this, arguments) ?? {};
-            if (Array.isArray(data.widgets_values) && this.widgets) {
-                const compact = [];
-                for (let i = 0; i < this.widgets.length; i++) {
-                    if (this.widgets[i]?.serialize !== false) {
-                        compact.push(data.widgets_values[i] ?? null);
-                    }
-                }
-                data.widgets_values = compact;
+        
+            if (this.widgets) {
+                data.widgets_values = this.widgets
+                    .filter(w => w?.serialize !== false)
+                    .map(w => w?.value ?? null);
             }
+        
             return data;
         };
 
