@@ -1085,72 +1085,121 @@ app.registerExtension({
             attachToNode(this);
             return result;
         };
+	    // Widget names in Python INPUT_TYPES order
+const WIDGET_NAMES = [
+    "mode", "text", "auto_save",
+    "history_paths", "save_to_path",
+    "active_paths", "max_entries"
+];
 
-        // LiteGraph's serialize() writes widget values using index-based assignment
-        // (widgets_values[widgetIndex] = value), so serialize:false widgets that sit
-        // in the middle of the array leave null holes. The restore code reads with a
-        // sequential counter, so every value after a hole lands in the wrong widget.
-        //
-        // Fix: rewrite widgets_values as a compact array (no holes) after the base
-        // serialize runs. This matches what the sequential restore expects.
-        const origSerialize = nodeType.prototype.serialize;
-        nodeType.prototype.serialize = function () {
-            const data = origSerialize?.apply(this, arguments) ?? {};
-        
-            if (this.widgets) {
-                data.widgets_values = this.widgets
-                    .filter(w => w?.serialize !== false)
-                    .map(w => w?.value ?? null);
+const DEFAULT_PATH =
+    "custom_nodes/comfyui-PromptHistory/history/prompt_history.json";
+
+// Save widget values by name as well as position
+const origSerialize = nodeType.prototype.serialize;
+
+nodeType.prototype.serialize = function (...args) {
+    const data = origSerialize?.apply(this, args) ?? {};
+    const named = {};
+
+    for (const name of WIDGET_NAMES) {
+        const w = getWidget(this, name);
+        if (w) named[name] = w.value;
+    }
+
+    // Named representation for reliable restoration
+    data.widgets_values_named = named;
+
+    // Compact representation for compatibility
+    data.widgets_values = WIDGET_NAMES.map(
+        name => named[name] ?? null
+    );
+
+    return data;
+};
+
+
+// Restore widget values by name
+const origConfigure = nodeType.prototype.onConfigure;
+
+nodeType.prototype.onConfigure = function (info, ...rest) {
+    this.__sph_is_configure = true;
+
+    const named = {};
+
+    if (info?.widgets_values_named &&
+        typeof info.widgets_values_named === "object") {
+
+        Object.assign(named, info.widgets_values_named);
+
+    } else if (Array.isArray(info?.widgets_values)) {
+
+        // Compatibility with older workflows
+        WIDGET_NAMES.forEach((name, i) => {
+            if (info.widgets_values[i] !== undefined) {
+                named[name] = info.widgets_values[i];
             }
-        
-            return data;
-        };
+        });
+    }
 
-        // Widget names in the compact serialization order (must match Python INPUT_TYPES).
-        const SERIALIZED_WIDGET_ORDER = [
-            "mode", "text", "auto_save",
-            "history_paths", "save_to_path", "active_paths", "max_entries",
-        ];
+    // Correct invalid values
+    if (named.mode != null &&
+        !["edit", "random", "sequential"].includes(named.mode)) {
+        named.mode = "edit";
+    }
 
-        const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function (info, ...rest) {
-            this.__sph_is_configure = true;
+    if (typeof named.text !== "string") {
+        named.text = "";
+    }
 
-            // Build a name→value snapshot from the compact widgets_values array,
-            // then re-apply after LiteGraph's own restore to ensure correct values
-            // even when the sequential restore is offset by the repositioned button.
-            const snapshot = {};
-            if (Array.isArray(info?.widgets_values)) {
-                SERIALIZED_WIDGET_ORDER.forEach((name, i) => {
-                    if (info.widgets_values[i] !== undefined) snapshot[name] = info.widgets_values[i];
-                });
-            }
+    if (typeof named.auto_save !== "boolean") {
+        named.auto_save = true;
+    }
 
-            const result = onConfigure?.apply(this, [info, ...rest]);
+    if (typeof named.history_paths !== "string" ||
+        !named.history_paths.trim()) {
+        named.history_paths = DEFAULT_PATH;
+    }
 
-            for (const [name, val] of Object.entries(snapshot)) {
-                const w = getWidget(this, name);
-                if (w) w.value = val;
-            }
+    if (typeof named.save_to_path !== "string" ||
+        !named.save_to_path.trim()) {
+        named.save_to_path = DEFAULT_PATH;
+    }
 
-            for (const w of this.widgets ?? []) {
-                if (!w || w.type === "button") continue;
+    if (typeof named.active_paths !== "string") {
+        named.active_paths = "";
+    }
 
-                if (w.name === "max_entries") {
-                    if (w.value == null || w.value === "") {
-                        w.value = 500000;
-                    } else {
-                        const n = Number(w.value);
-                        w.value = Number.isFinite(n)
-                            ? Math.max(1, Math.min(10000000, Math.trunc(n)))
-                            : 500000;
-                    }
-                } else if (w.value == null) {
-                    w.value = "";
-                }
-            }
-            this.__sph_syncTextState?.();
-            return result;
-        };
+    const n = Number(named.max_entries);
+
+    named.max_entries =
+        named.max_entries == null ||
+        named.max_entries === "" ||
+        !Number.isFinite(n)
+            ? 500000
+            : Math.max(1, Math.min(10000000, Math.trunc(n)));
+
+    // Give LiteGraph a normalized compact array
+    const normalizedInfo = {
+        ...info,
+        widgets_values: WIDGET_NAMES.map(name => named[name]),
+        widgets_values_named: named
+    };
+
+    const result = origConfigure?.apply(
+        this, [normalizedInfo, ...rest]
+    );
+
+    // Restore by name, regardless of widget positions
+    for (const name of WIDGET_NAMES) {
+        const w = getWidget(this, name);
+        if (w) w.value = named[name];
+    }
+
+    this.__sph_syncTextState?.();
+
+    return result;
+};
+
     },
 });
